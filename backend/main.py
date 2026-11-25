@@ -3,9 +3,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import os
+import secrets
 import sqlite3
 import uuid
-import secrets
+
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -19,8 +20,10 @@ CATEGORIES = {"Road", "Lighting", "Waste", "Sidewalk", "Other"}
 STATUSES = {"New", "In Progress", "Resolved"}
 MAX_IMAGE = 5 * 1024 * 1024
 
-ADMIN_PASSWORD = os.environ.get("CITYFIX_ADMIN_PASSWORD", "admin123")  
-admin_tokens: set[str] = set()
+# --- Admin mode -------------------------------------------------------------
+# Password comes from the environment. Change the default before sharing the app.
+ADMIN_PASSWORD = os.environ.get("CITYFIX_ADMIN_PASSWORD", "admin123")
+admin_tokens: set[str] = set()  # kept in memory: admins must log in again after a restart
 
 
 def require_admin(authorization: str | None = Header(default=None)):
@@ -29,20 +32,11 @@ def require_admin(authorization: str | None = Header(default=None)):
         raise HTTPException(401, "Admin login required")
     return token
 
-from contextlib import asynccontextmanager, contextmanager  
 
-@contextmanager
 def connect():
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
-    try:
-        yield c
-        c.commit()
-    except Exception:
-        c.rollback()
-        raise
-    finally:
-        c.close()
+    return c
 
 
 def init_db():
@@ -76,7 +70,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CityFix API", version="0.1", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_methods=["GET", "POST", "PATCH"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["*"])
 app.mount("/uploads", StaticFiles(directory=UPLOADS), name="uploads")
 
 
@@ -107,9 +101,6 @@ def logout(token: str = Depends(require_admin)):
     admin_tokens.discard(token)
     return {"ok": True}
 
-
-def as_issue(row):
-    return dict(row)
 
 def as_issue(row):
     return dict(row)
@@ -169,3 +160,15 @@ def update_status(issue_id: int, payload: StatusUpdate):
         if cur.rowcount == 0:
             raise HTTPException(404, "Issue not found")
         return as_issue(c.execute("SELECT * FROM issues WHERE id=?", (issue_id,)).fetchone())
+
+
+@app.delete("/api/issues/{issue_id}", dependencies=[Depends(require_admin)])
+def delete_issue(issue_id: int):
+    with connect() as c:
+        row = c.execute("SELECT image_url FROM issues WHERE id=?", (issue_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "Issue not found")
+        c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    if row["image_url"]:
+        (UPLOADS / Path(row["image_url"]).name).unlink(missing_ok=True)
+    return {"ok": True}
