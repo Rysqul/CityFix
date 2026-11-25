@@ -48,4 +48,5 @@ function App() {
   {loginOpen&&<div className="overlay" onClick={()=>setLoginOpen(false)}><div className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setLoginOpen(false)}><X/></button><div className="eyebrow">ADMIN MODE</div><h2>Admin login</h2>{error&&<p className="muted">{error}</p>}<form onSubmit={login}><label className="field"><b>Password</b><input type="password" autoFocus required value={password} onChange={e=>setPassword(e.target.value)}/></label><button className="primary submit">Log in <ArrowRight size={17}/></button></form></div></div>}
  </div>
 }
-function Report({issue:i,select}){return <button 
+function Report({issue:i,select}){return <button className="report" onClick={()=>select(i)}><span className="report-icon">{symbols[i.category]}</span><span className="report-text"><strong>{i.title}</strong><small>{i.category} · #{i.id}</small></span><span className={'pill '+i.status.replace(' ','-')}>{i.status}</span></button>}
+createRoot(document.getElementById('root')).render(<App/>);
