@@ -5,8 +5,8 @@ from pathlib import Path
 import os
 import sqlite3
 import uuid
-
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+import secrets
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -19,6 +19,15 @@ CATEGORIES = {"Road", "Lighting", "Waste", "Sidewalk", "Other"}
 STATUSES = {"New", "In Progress", "Resolved"}
 MAX_IMAGE = 5 * 1024 * 1024
 
+ADMIN_PASSWORD = os.environ.get("CITYFIX_ADMIN_PASSWORD", "admin123")  
+admin_tokens: set[str] = set()
+
+
+def require_admin(authorization: str | None = Header(default=None)):
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    if token not in admin_tokens:
+        raise HTTPException(401, "Admin login required")
+    return token
 
 def connect():
     c = sqlite3.connect(DB_PATH)
@@ -64,6 +73,33 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS), name="uploads")
 class StatusUpdate(BaseModel):
     status: str
 
+
+class LoginIn(BaseModel):
+    password: str
+
+
+@app.post("/api/auth/login")
+def login(data: LoginIn):
+    if not secrets.compare_digest(data.password.encode(), ADMIN_PASSWORD.encode()):
+        raise HTTPException(401, "Wrong password")
+    token = secrets.token_urlsafe(32)
+    admin_tokens.add(token)
+    return {"token": token, "role": "admin"}
+
+
+@app.get("/api/auth/me")
+def me(_: str = Depends(require_admin)):
+    return {"role": "admin"}
+
+
+@app.post("/api/auth/logout")
+def logout(token: str = Depends(require_admin)):
+    admin_tokens.discard(token)
+    return {"ok": True}
+
+
+def as_issue(row):
+    return dict(row)
 
 def as_issue(row):
     return dict(row)
@@ -114,9 +150,8 @@ async def create_issue(
         return as_issue(c.execute("SELECT * FROM issues WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
-@app.patch("/api/issues/{issue_id}/status")
+@app.patch("/api/issues/{issue_id}/status", dependencies=[Depends(require_admin)])
 def update_status(issue_id: int, payload: StatusUpdate):
-    # Classroom demo only. Do NOT expose this unauthenticated endpoint on the public internet.
     if payload.status not in STATUSES:
         raise HTTPException(400, "Invalid status")
     with connect() as c:
