@@ -20,10 +20,20 @@ STATUSES = {"New", "In Progress", "Resolved"}
 MAX_IMAGE = 5 * 1024 * 1024
 
 
+from contextlib import asynccontextmanager, contextmanager  
+
+@contextmanager
 def connect():
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
-    return c
+    try:
+        yield c
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
 
 
 def init_db():
